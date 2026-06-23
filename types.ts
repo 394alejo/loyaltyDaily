@@ -56,7 +56,7 @@ export type StoredTemplate = Omit<Template, 'icon'> & {
 
 export interface Transaction {
   id: string;
-  type: 'stamp_add' | 'stamp_remove' | 'redeem' | 'issued';
+  type: 'stamp_add' | 'stamp_remove' | 'redeem' | 'issued' | 'discount_claim';
   amount: number;
   date: string; // Formatted string for display
   timestamp: number; // For sorting
@@ -65,6 +65,10 @@ export interface Transaction {
   actorId?: string;
   actorName?: string;
   actorRole?: UserRole;
+  campaignId?: string;
+  customerId?: string;
+  pin?: string;
+  status?: 'pending' | 'confirmed' | 'rejected';
 }
 
 export interface IssuedCard {
@@ -91,7 +95,7 @@ export interface Customer {
 
 // Internal account state. Email confirmation now comes from Supabase auth.
 export type AccountStatus = 'unverified' | 'verified';
-export type UserRole = 'owner' | 'staff';
+export type UserRole = 'owner' | 'staff' | 'customer' | 'admin';
 export type AccessStatus = 'active' | 'disabled';
 export type SubscriptionTier = 'free' | 'pro';
 
@@ -103,6 +107,7 @@ export const TIER_LIMITS = {
 export interface User {
   id: string;
   businessName: string;
+  fullName?: string;
   email: string;
   slug?: string;
   role: UserRole;

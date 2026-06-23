@@ -2,7 +2,11 @@ import React from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "./AuthProvider";
 
-export const RequireAuth: React.FC = () => {
+interface RequireAuthProps {
+  redirectTo?: string;
+}
+
+export const RequireAuth: React.FC<RequireAuthProps> = ({ redirectTo = "/login" }) => {
   const { currentUser, loading } = useAuth();
   const location = useLocation();
 
@@ -16,7 +20,7 @@ export const RequireAuth: React.FC = () => {
   }
 
   if (!currentUser) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    return <Navigate to={redirectTo} state={{ from: location }} replace />;
   }
 
   return <Outlet />;

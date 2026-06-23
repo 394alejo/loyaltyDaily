@@ -14,7 +14,7 @@ import { VerifyBanner } from './components/VerifyBanner';
 import { fetchCampaigns, upsertCampaign, deleteCampaign as dbDeleteCampaign, setCampaignEnabled } from './lib/db/campaigns';
 import { fetchCustomersWithCards } from './lib/db/customers';
 import { fetchPublicScanEntryContext } from './lib/db/issuedCards';
-import { buildIssuedCardsKioskUrl, buildStaffPortalUrl, buildStaffScanEntryUrl } from './lib/links';
+import { buildIssuedCardsKioskUrl, buildStaffPortalUrl, buildStaffScanEntryUrl, getDefaultRouteForRole } from './lib/links';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { useSubscription } from './lib/useSubscription';
 import { SubscriptionProvider } from './components/SubscriptionContext';
@@ -74,6 +74,7 @@ const CardEditor = lazy(() => import('./components/CardEditor').then((module) =>
 const MyCards = lazy(() => import('./components/MyCards').then((module) => ({ default: module.MyCards })));
 const IssuedCardsPage = lazy(() => import('./components/IssuedCardsPage').then((module) => ({ default: module.IssuedCardsPage })));
 const CustomerDirectory = lazy(() => import('./components/CustomerDirectory').then((module) => ({ default: module.CustomerDirectory })));
+const DiscountRequestsPage = lazy(() => import('./components/DiscountRequestsPage').then((module) => ({ default: module.DiscountRequestsPage })));
 const TemplatesGallery = lazy(() => import('./components/TemplatesGallery').then((module) => ({ default: module.TemplatesGallery })));
 const TransactionsPage = lazy(() => import('./components/TransactionsPage').then((module) => ({ default: module.TransactionsPage })));
 const AnalyticsPage = lazy(() => import('./components/AnalyticsPage').then((module) => ({ default: module.AnalyticsPage })));
@@ -83,6 +84,13 @@ const SettingsPage = lazy(() => import('./components/SettingsPage').then((module
 const ForgotPasswordPage = lazy(() => import('./components/ForgotPasswordPage').then((module) => ({ default: module.ForgotPasswordPage })));
 const DashboardPage = lazy(() => import('./components/DashboardPage').then((module) => ({ default: module.DashboardPage })));
 const PublicCampaignSignupPage = lazy(() => import('./components/PublicCampaignSignupPage').then((module) => ({ default: module.PublicCampaignSignupPage })));
+const CustomerLoginPage = lazy(() => import('./components/CustomerLoginPage').then((module) => ({ default: module.CustomerLoginPage })));
+const CustomerSignupPage = lazy(() => import('./components/CustomerSignupPage').then((module) => ({ default: module.CustomerSignupPage })));
+const CampaignVenuePage = lazy(() => import('./components/CampaignVenuePage').then((module) => ({ default: module.CampaignVenuePage })));
+const MyVisitsPage = lazy(() => import('./components/MyVisitsPage').then((module) => ({ default: module.MyVisitsPage })));
+const TransactionHistoryPage = lazy(() => import('./components/TransactionHistoryPage').then((module) => ({ default: module.TransactionHistoryPage })));
+const MyPointsPage = lazy(() => import('./components/MyPointsPage').then((module) => ({ default: module.MyPointsPage })));
+const AwardPointsPage = lazy(() => import('./components/AwardPointsPage').then((module) => ({ default: module.AwardPointsPage })));
 
 const RouteLoader: React.FC = () => (
   <div className="flex min-h-[40vh] w-full items-center justify-center">
@@ -398,6 +406,20 @@ const StaffScanEntryWrapper: React.FC = () => {
   );
 };
 
+const RootRedirect: React.FC = () => {
+  const { currentUser, loading } = useAuth();
+
+  if (loading && !currentUser) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    );
+  }
+
+  return <Navigate to={getDefaultRouteForRole(currentUser?.role)} replace />;
+};
+
 const ActiveCardWrapper: React.FC<{ templates: Template[] }> = ({ templates }) => {
   const { cardId } = useParams<{ cardId: string }>();
   const navigate = useNavigate();
@@ -636,13 +658,24 @@ const AppRoutes: React.FC = () => {
       )}
       <Routes>
         {/* Public Routes */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="/" element={<RootRedirect />} />
         <Route path="/:slug/staff" element={withSuspense(<StaffLoginPage />)} />
         <Route path="/:slug/scan/:uniqueId" element={<StaffScanEntryWrapper />} />
         <Route path="/:slug/join/:campaignId" element={withSuspense(<PublicCampaignSignupPage />)} />
         <Route path="/:slug/:uniqueId" element={<PublicCardWrapper />} />
         <Route path="/login" element={withSuspense(<LoginPage />)} />
         <Route path="/forgot-password" element={withSuspense(<ForgotPasswordPage />)} />
+        <Route path="/customer/login" element={withSuspense(<CustomerLoginPage />)} />
+        <Route path="/customer/signup" element={withSuspense(<CustomerSignupPage />)} />
+
+        {/* Customer Routes */}
+        <Route element={<RequireAuth redirectTo="/customer/login" />}>
+          <Route element={<RequireRole allowed={["customer"]} redirectTo="/customer/login" />}>
+            <Route path="/venue/:campaignId" element={withSuspense(<CampaignVenuePage />)} />
+            <Route path="/customer/visits" element={withSuspense(<MyVisitsPage />)} />
+            <Route path="/customer/points" element={withSuspense(<MyPointsPage />)} />
+          </Route>
+        </Route>
 
         {/* Authenticated Routes */}
         <Route element={<RequireAuth />}>
@@ -650,6 +683,10 @@ const AppRoutes: React.FC = () => {
             <Route path="/active/:cardId" element={<ActiveCardWrapper templates={createdCards} />} />
             <Route path="/preview/:templateId" element={<PreviewWrapper />} />
             <Route path="/editor/:id" element={<EditorWrapper onSave={handleSaveCard} templates={createdCards} />} />
+          </Route>
+
+          <Route element={<RequireRole allowed={["admin"]} />}>
+            <Route path="/admin/award-points" element={withSuspense(<AwardPointsPage />)} />
           </Route>
 
           <Route element={<DashboardLayout />}>
@@ -694,6 +731,8 @@ const AppRoutes: React.FC = () => {
                   />
                 )
               } />
+              <Route path="/discount-requests" element={withSuspense(<DiscountRequestsPage />)} />
+              <Route path="/discount-history" element={withSuspense(<TransactionHistoryPage />)} />
             </Route>
           </Route>
         </Route>

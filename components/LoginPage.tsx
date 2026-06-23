@@ -42,7 +42,11 @@ export const LoginPage: React.FC = () => {
 
   // Once auth state is resolved and user is logged in, redirect
   if (!loading && currentUser) {
-    return <Navigate to={fromPath ?? (currentUser.role === "staff" ? "/issued-cards" : "/dashboard")} replace />;
+    const fallback =
+      currentUser.role === "staff" ? "/issued-cards"
+      : currentUser.role === "admin" ? "/admin/award-points"
+      : "/dashboard";
+    return <Navigate to={fromPath ?? fallback} replace />;
   }
 
   const handleSubmit = async (event: React.FormEvent) => {

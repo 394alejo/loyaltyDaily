@@ -1,12 +1,13 @@
 import { supabase } from '../supabase';
-import type { User } from '../../types';
+import type { User, UserRole } from '../../types';
 
 export const profileToUser = (row: Record<string, unknown>): User => ({
   id: row.id as string,
   businessName: row.business_name as string,
+  fullName: (row.full_name as string | null) ?? undefined,
   email: row.email as string,
   slug: row.slug as string | undefined,
-  role: row.role as 'owner' | 'staff',
+  role: row.role as UserRole,
   ownerId: row.owner_id as string | undefined,
   status: row.status as 'unverified' | 'verified',
   access: row.access as 'active' | 'disabled',

@@ -20,12 +20,14 @@ interface AuthContextValue {
   currentOwner: User | null;
   isOwner: boolean;
   isStaff: boolean;
+  isCustomer: boolean;
   isEmailVerified: boolean;
   loading: boolean;
   staffAccounts: User[];
   login: (email: string, password: string) => Promise<AuthResult>;
   loginStaff: (email: string, pin: string, orgId: string) => Promise<AuthResult>;
   signup: (payload: { businessName: string; email: string; password: string; slug: string }) => Promise<AuthResult>;
+  signupCustomer: (payload: { fullName: string; email: string; password: string }) => Promise<AuthResult>;
   loginDemo: () => Promise<void>;
   createStaff: (payload: { name: string; email: string; pin: string }) => Promise<AuthResult>;
   updateStaffPin: (staffId: string, pin: string) => Promise<AuthResult>;
@@ -95,17 +97,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const createMissingProfile = useCallback(async (authUser: AuthUserLike): Promise<RepairResult> => {
     const metadata = authUser.user_metadata ?? {};
     const metadataRole = typeof metadata.role === "string" ? metadata.role : "owner";
-    const role: "owner" | "staff" = metadataRole === "staff" ? "staff" : "owner";
+    const role: "owner" | "staff" | "customer" =
+      metadataRole === "staff" ? "staff" : metadataRole === "customer" ? "customer" : "owner";
     const ownerId = typeof metadata.owner_id === "string" ? metadata.owner_id : null;
     const rawBusinessName = typeof metadata.business_name === "string" ? metadata.business_name.trim() : "";
     const fallbackName = authUser.email?.split("@")[0]?.trim() || "New Business";
-    const businessName = rawBusinessName || fallbackName;
+    const businessName = role === "customer" ? "" : rawBusinessName || fallbackName;
+    const rawFullName = typeof metadata.full_name === "string" ? metadata.full_name.trim() : "";
+    const fullName = role === "customer" ? rawFullName || null : null;
     const slugRaw = typeof metadata.slug === "string" ? metadata.slug : "";
     const slug = role === "owner" ? normalizeSlug(slugRaw) || null : null;
 
     const payload = {
       id: authUser.id,
       business_name: businessName,
+      full_name: fullName,
       email: (authUser.email || "").trim().toLowerCase(),
       slug,
       role,
@@ -358,6 +364,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  const signupCustomer = useCallback(async (payload: {
+    fullName: string; email: string; password: string;
+  }): Promise<AuthResult> => {
+    if (!isSupabaseConfigured) {
+      return { ok: false, error: CONFIG_ERROR_MESSAGE };
+    }
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: payload.email.trim().toLowerCase(),
+        password: payload.password,
+        options: {
+          data: {
+            full_name: payload.fullName.trim(),
+            role: "customer",
+          },
+          emailRedirectTo: buildAppUrl("/customer/login"),
+        },
+      });
+      if (error) {
+        if (isDuplicateSignupError(error.message)) {
+          return { ok: false, error: SIGNUP_EMAIL_EXISTS_MESSAGE };
+        }
+        return { ok: false, error: SIGNUP_ERROR_MESSAGE };
+      }
+      if (Array.isArray(data.user?.identities) && data.user.identities.length === 0) {
+        return { ok: false, error: SIGNUP_EMAIL_EXISTS_MESSAGE };
+      }
+      if (!data.session) {
+        return {
+          ok: true,
+          message: "Signup succeeded. Confirm your email before signing in. Check your inbox and spam folder for the confirmation link.",
+        };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, error: SIGNUP_ERROR_MESSAGE };
+    }
+  }, []);
+
   const loginDemo = useCallback(async () => {
     if (!DEMO_WORKSPACE_ENABLED) {
       throw new Error("Demo workspace is currently unavailable.");
@@ -556,12 +601,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       currentOwner,
       isOwner: currentUser?.role === "owner",
       isStaff: currentUser?.role === "staff",
+      isCustomer: currentUser?.role === "customer",
       isEmailVerified,
       loading,
       staffAccounts,
       login,
       loginStaff,
       signup,
+      signupCustomer,
       loginDemo,
       createStaff,
       updateStaffPin,
@@ -578,7 +625,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }),
     [
       currentUser, currentOwner, isEmailVerified, loading, staffAccounts,
-      login, loginStaff, signup, loginDemo, createStaff,
+      login, loginStaff, signup, signupCustomer, loginDemo, createStaff,
       updateStaffPin, setStaffAccess, deleteStaff, deleteAccount, logout,
       resendVerificationEmail, isSlugAvailable, updateProfileInfo,
       updatePassword, resetPassword, refreshProfile,

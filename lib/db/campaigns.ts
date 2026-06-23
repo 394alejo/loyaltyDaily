@@ -104,6 +104,27 @@ export async function deleteCampaign(campaignId: string): Promise<{ ok: boolean;
   return { ok: true };
 }
 
+export interface VenueCampaign {
+  id: string;
+  name: string;
+  isEnabled: boolean;
+  businessName: string;
+  userDiscountPercent: number;
+}
+
+export async function fetchVenueCampaign(campaignId: string): Promise<VenueCampaign | null> {
+  const { data, error } = await supabase
+    .rpc('get_venue_campaign', { campaign_id_input: campaignId });
+  if (error || !data) return null;
+  return {
+    id: data.id,
+    name: data.name,
+    isEnabled: data.isEnabled,
+    businessName: data.businessName,
+    userDiscountPercent: Number(data.userDiscountPercent),
+  };
+}
+
 export async function countCampaigns(ownerId: string): Promise<number> {
   const { count, error } = await supabase
     .from('campaigns')

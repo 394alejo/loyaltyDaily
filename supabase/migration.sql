@@ -12,9 +12,10 @@ create extension if not exists pgcrypto with schema extensions;
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   business_name text not null,
+  full_name text,
   email text not null,
   slug text unique,
-  role text not null default 'owner' check (role in ('owner', 'staff')),
+  role text not null default 'owner' check (role in ('owner', 'staff', 'customer', 'admin')),
   owner_id uuid references public.profiles(id) on delete cascade,
   status text not null default 'unverified' check (status in ('unverified', 'verified')),
   access text not null default 'active' check (access in ('active', 'disabled')),
@@ -22,6 +23,13 @@ create table if not exists public.profiles (
   tier_expires_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.profiles
+  add column if not exists full_name text;
+
+alter table public.profiles drop constraint if exists profiles_role_check;
+alter table public.profiles add constraint profiles_role_check
+  check (role in ('owner', 'staff', 'customer', 'admin'));
 
 alter table public.profiles enable row level security;
 
@@ -37,6 +45,19 @@ as $$
   where p.id = (select auth.uid())
     and p.role = 'staff'
   limit 1
+$$;
+
+-- Stampee-operator role, manually provisioned (no self-serve signup). Used
+-- to gate the platform-wide "award points" tool without a broad profiles
+-- read policy that would expose every customer to every other role.
+create or replace function public.current_user_role()
+returns text
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select role from public.profiles where id = (select auth.uid())
 $$;
 
 drop policy if exists "Users can read own profile" on public.profiles;
@@ -56,6 +77,13 @@ create policy "Staff can read owner profile"
   on public.profiles for select
   using (
     id = (select public.current_staff_owner_id())
+  );
+
+drop policy if exists "Admins can read customer profiles" on public.profiles;
+create policy "Admins can read customer profiles"
+  on public.profiles for select
+  using (
+    role = 'customer' and (select public.current_user_role()) = 'admin'
   );
 
 drop policy if exists "Users can update own profile" on public.profiles;
@@ -99,10 +127,11 @@ begin
     v_owner_id := null;
   end if;
 
-  insert into public.profiles (id, business_name, email, slug, role, owner_id, status, access, tier)
+  insert into public.profiles (id, business_name, full_name, email, slug, role, owner_id, status, access, tier)
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'business_name', ''),
+    new.raw_user_meta_data->>'full_name',
     new.email,
     case when v_role = 'owner' then new.raw_user_meta_data->>'slug' else null end,
     v_role,
@@ -141,11 +170,32 @@ create table if not exists public.campaigns (
   colors jsonb not null,
   total_stamps int not null default 10,
   social jsonb,
+  total_discount_percent numeric(5,2) not null default 0,
+  ngo_commission_percent numeric(5,2) not null default 0,
+  user_discount_percent numeric(5,2) generated always as (total_discount_percent - ngo_commission_percent) stored,
   created_at timestamptz not null default now()
 );
 
 alter table public.campaigns
   add column if not exists is_enabled boolean not null default true;
+
+alter table public.campaigns
+  add column if not exists total_discount_percent numeric(5,2) not null default 0;
+
+alter table public.campaigns
+  add column if not exists ngo_commission_percent numeric(5,2) not null default 0;
+
+alter table public.campaigns
+  add column if not exists user_discount_percent numeric(5,2) generated always as (total_discount_percent - ngo_commission_percent) stored;
+
+alter table public.campaigns drop constraint if exists campaigns_discount_range_check;
+alter table public.campaigns add constraint campaigns_discount_range_check
+  check (
+    ngo_commission_percent >= 0
+    and total_discount_percent >= 0
+    and total_discount_percent <= 100
+    and ngo_commission_percent <= total_discount_percent
+  );
 
 alter table public.campaigns enable row level security;
 
@@ -332,8 +382,12 @@ drop policy if exists "Anyone can read issued cards by unique_id" on public.issu
 -- 5. TRANSACTIONS TABLE
 create table if not exists public.transactions (
   id text primary key default gen_random_uuid()::text,
-  card_id text not null references public.issued_cards(id) on delete cascade,
-  type text not null check (type in ('stamp_add', 'stamp_remove', 'redeem', 'issued')),
+  card_id text references public.issued_cards(id) on delete cascade,
+  campaign_id text references public.campaigns(id) on delete set null,
+  customer_id uuid references public.profiles(id) on delete set null,
+  pin text,
+  status text not null default 'pending' check (status in ('pending', 'confirmed', 'rejected')),
+  type text not null check (type in ('stamp_add', 'stamp_remove', 'redeem', 'issued', 'discount_claim')),
   amount int not null default 0,
   date text not null,
   "timestamp" bigint not null,
@@ -344,7 +398,37 @@ create table if not exists public.transactions (
   actor_role text
 );
 
+alter table public.transactions alter column card_id drop not null;
+
+alter table public.transactions
+  add column if not exists campaign_id text references public.campaigns(id) on delete set null;
+
+alter table public.transactions
+  add column if not exists customer_id uuid references public.profiles(id) on delete set null;
+
+alter table public.transactions
+  add column if not exists pin text;
+
+alter table public.transactions
+  add column if not exists status text not null default 'pending';
+
+alter table public.transactions drop constraint if exists transactions_status_check;
+alter table public.transactions add constraint transactions_status_check
+  check (status in ('pending', 'confirmed', 'rejected'));
+
+alter table public.transactions drop constraint if exists transactions_type_check;
+alter table public.transactions add constraint transactions_type_check
+  check (type in ('stamp_add', 'stamp_remove', 'redeem', 'issued', 'discount_claim'));
+
 alter table public.transactions enable row level security;
+
+drop policy if exists "Customers can insert own discount claims" on public.transactions;
+create policy "Customers can insert own discount claims"
+  on public.transactions for insert
+  with check (
+    type = 'discount_claim'
+    and customer_id = (select auth.uid())
+  );
 
 drop policy if exists "Owners can manage transactions for own cards" on public.transactions;
 create policy "Owners can manage transactions for own cards"
@@ -379,6 +463,65 @@ create policy "Staff can insert transactions for owner cards"
 
 -- Public card history is exposed only through get_public_card().
 drop policy if exists "Anyone can read transactions for public cards" on public.transactions;
+
+-- Venue lookup for the reverse-scan flow. Returns only the customer-safe
+-- subset of a campaign (never total_discount_percent or ngo_commission_percent).
+create or replace function public.get_venue_campaign(campaign_id_input text)
+returns jsonb as $$
+declare
+  campaign_row record;
+begin
+  select c.id, c.name, c.is_enabled, c.user_discount_percent, p.business_name
+  into campaign_row
+  from public.campaigns c
+  join public.profiles p on p.id = c.owner_id
+  where c.id = campaign_id_input;
+
+  if not found then
+    return null;
+  end if;
+
+  return jsonb_build_object(
+    'id', campaign_row.id,
+    'name', campaign_row.name,
+    'isEnabled', campaign_row.is_enabled,
+    'businessName', campaign_row.business_name,
+    'userDiscountPercent', campaign_row.user_discount_percent
+  );
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+grant execute on function public.get_venue_campaign(text) to authenticated;
+
+-- Returns the calling customer's own pending discount claim for a venue, if
+-- any, so the venue page can show the existing PIN instead of generating a
+-- new one and re-submitting a duplicate row.
+create or replace function public.get_active_venue_claim(campaign_id_input text)
+returns jsonb as $$
+declare
+  claim_row record;
+begin
+  select t.id, t.pin
+  into claim_row
+  from public.transactions t
+  where t.campaign_id = campaign_id_input
+    and t.customer_id = (select auth.uid())
+    and t.type = 'discount_claim'
+    and t.status = 'pending'
+  order by t."timestamp" desc
+  limit 1;
+
+  if not found then
+    return null;
+  end if;
+
+  return jsonb_build_object('id', claim_row.id, 'pin', claim_row.pin);
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+grant execute on function public.get_active_venue_claim(text) to authenticated;
 
 
 -- 6. LICENSE KEYS TABLE
@@ -1007,3 +1150,239 @@ begin
 end;
 $$ language plpgsql security definer
 set search_path = public;
+
+-- 15. PENDING DISCOUNT CLAIMS (RPC)
+-- Staff/owner cashier queue for the reverse-scan discount flow. Resolves the
+-- caller's effective owner (themselves for owners, their employer for staff)
+-- so transactions stay isolated between venues without needing a broad
+-- profiles read policy to expose customer names.
+create or replace function public.get_pending_discount_claims()
+returns jsonb as $$
+declare
+  caller_role text;
+  effective_owner_id uuid;
+begin
+  select role, coalesce(owner_id, id) into caller_role, effective_owner_id
+  from public.profiles
+  where id = (select auth.uid());
+
+  if caller_role is null or caller_role not in ('owner', 'staff') then
+    return '[]'::jsonb;
+  end if;
+
+  return coalesce(jsonb_agg(
+    jsonb_build_object(
+      'id', t.id,
+      'campaignId', t.campaign_id,
+      'campaignName', c.name,
+      'customerName', p.full_name,
+      'pin', t.pin,
+      'discountPercent', c.user_discount_percent,
+      'timestamp', t."timestamp"
+    ) order by t."timestamp"
+  ), '[]'::jsonb)
+  from public.transactions t
+  join public.campaigns c on c.id = t.campaign_id
+  left join public.profiles p on p.id = t.customer_id
+  where t.status = 'pending'
+    and t.type = 'discount_claim'
+    and c.owner_id = effective_owner_id;
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+grant execute on function public.get_pending_discount_claims() to authenticated;
+
+create or replace function public.set_discount_claim_status(transaction_id_input text, new_status text)
+returns jsonb as $$
+declare
+  caller_role text;
+  effective_owner_id uuid;
+  updated_id text;
+begin
+  if new_status not in ('confirmed', 'rejected') then
+    return jsonb_build_object('success', false);
+  end if;
+
+  select role, coalesce(owner_id, id) into caller_role, effective_owner_id
+  from public.profiles
+  where id = (select auth.uid());
+
+  if caller_role is null or caller_role not in ('owner', 'staff') then
+    return jsonb_build_object('success', false);
+  end if;
+
+  update public.transactions t
+  set status = new_status
+  from public.campaigns c
+  where t.id = transaction_id_input
+    and t.campaign_id = c.id
+    and c.owner_id = effective_owner_id
+    and t.status = 'pending'
+    and t.type = 'discount_claim'
+  returning t.id into updated_id;
+
+  if updated_id is null then
+    return jsonb_build_object('success', false);
+  end if;
+
+  return jsonb_build_object('success', true);
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+grant execute on function public.set_discount_claim_status(text, text) to authenticated;
+
+-- 16. DISCOUNT CLAIM HISTORY (RPCs)
+-- History must survive a venue later deleting a campaign. campaign_id is
+-- ON DELETE SET NULL, which also wipes out the only path to a claim's
+-- owner_id (campaigns.owner_id) — so once a campaign is gone, a staff/owner
+-- history query would have no safe way to scope rows to "their" venue.
+-- We snapshot owner_id directly onto the transaction row at insert time
+-- (mirrors how issued_cards.template_snapshot survives campaign deletion),
+-- so ownership scoping never depends on a live campaign row.
+alter table public.transactions
+  add column if not exists owner_id uuid references public.profiles(id) on delete set null;
+
+create or replace function public.set_discount_claim_owner()
+returns trigger as $$
+begin
+  if new.type = 'discount_claim' and new.campaign_id is not null then
+    select owner_id into new.owner_id from public.campaigns where id = new.campaign_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+drop trigger if exists transactions_set_discount_claim_owner on public.transactions;
+create trigger transactions_set_discount_claim_owner
+  before insert on public.transactions
+  for each row execute function public.set_discount_claim_owner();
+
+-- Backfill owner_id for any discount_claim rows inserted before this column
+-- existed, as long as their campaign hasn't been deleted yet.
+update public.transactions t
+set owner_id = c.owner_id
+from public.campaigns c
+where t.campaign_id = c.id
+  and t.type = 'discount_claim'
+  and t.owner_id is null;
+
+create or replace function public.get_my_discount_claims()
+returns jsonb as $$
+begin
+  return coalesce(jsonb_agg(
+    jsonb_build_object(
+      'id', t.id,
+      'venueName', coalesce(p.business_name, 'Deleted campaign'),
+      'campaignName', coalesce(c.name, 'Deleted campaign'),
+      'discountPercent', c.user_discount_percent,
+      'status', t.status,
+      'timestamp', t."timestamp"
+    ) order by t."timestamp" desc
+  ), '[]'::jsonb)
+  from public.transactions t
+  left join public.campaigns c on c.id = t.campaign_id
+  left join public.profiles p on p.id = t.owner_id
+  where t.customer_id = (select auth.uid())
+    and t.type = 'discount_claim'
+    and t.status in ('confirmed', 'rejected')
+  limit 300;
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+grant execute on function public.get_my_discount_claims() to authenticated;
+
+create or replace function public.get_discount_claim_history()
+returns jsonb as $$
+declare
+  caller_role text;
+  effective_owner_id uuid;
+begin
+  select role, coalesce(owner_id, id) into caller_role, effective_owner_id
+  from public.profiles
+  where id = (select auth.uid());
+
+  if caller_role is null or caller_role not in ('owner', 'staff') then
+    return '[]'::jsonb;
+  end if;
+
+  return coalesce(jsonb_agg(
+    jsonb_build_object(
+      'id', t.id,
+      'campaignName', coalesce(c.name, 'Deleted campaign'),
+      'customerName', p.full_name,
+      'pin', t.pin,
+      'discountPercent', c.user_discount_percent,
+      'status', t.status,
+      'timestamp', t."timestamp"
+    ) order by t."timestamp" desc
+  ), '[]'::jsonb)
+  from public.transactions t
+  left join public.campaigns c on c.id = t.campaign_id
+  left join public.profiles p on p.id = t.customer_id
+  where t.type = 'discount_claim'
+    and t.status in ('confirmed', 'rejected')
+    and t.owner_id = effective_owner_id
+  limit 300;
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+grant execute on function public.get_discount_claim_history() to authenticated;
+
+-- 17. POINTS LEDGER (TABLE + RPC)
+-- Manual end-of-month points awarded by a Stampee-operator admin, based on
+-- CSV reports the venues send in (there's no POS integration to read stamps
+-- from directly). An immutable append-only log rather than a mutable
+-- balance column, so every award/redemption stays auditable.
+create table if not exists public.points_ledger (
+  id uuid primary key default gen_random_uuid(),
+  customer_id uuid not null references public.profiles(id) on delete cascade,
+  points integer not null check (points <> 0),
+  description text not null,
+  created_by uuid references public.profiles(id) on delete set null default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists points_ledger_customer_id_idx on public.points_ledger(customer_id);
+
+alter table public.points_ledger enable row level security;
+
+drop policy if exists "Customers can read own points ledger" on public.points_ledger;
+create policy "Customers can read own points ledger"
+  on public.points_ledger for select
+  using (customer_id = (select auth.uid()));
+
+drop policy if exists "Admins can read points ledger" on public.points_ledger;
+create policy "Admins can read points ledger"
+  on public.points_ledger for select
+  using ((select public.current_user_role()) = 'admin');
+
+drop policy if exists "Admins can insert points ledger" on public.points_ledger;
+create policy "Admins can insert points ledger"
+  on public.points_ledger for insert
+  with check ((select public.current_user_role()) = 'admin');
+
+create or replace function public.get_customer_points_balance(customer_id_input uuid)
+returns integer as $$
+declare
+  caller_role text;
+begin
+  select role into caller_role from public.profiles where id = (select auth.uid());
+
+  if (select auth.uid()) <> customer_id_input and (caller_role is null or caller_role <> 'admin') then
+    return null;
+  end if;
+
+  return coalesce(
+    (select sum(points) from public.points_ledger where customer_id = customer_id_input),
+    0
+  );
+end;
+$$ language plpgsql security definer
+set search_path = public;
+
+grant execute on function public.get_customer_points_balance(uuid) to authenticated;

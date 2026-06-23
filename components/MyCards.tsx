@@ -16,8 +16,7 @@ import { QrCodeDisplay } from './ui/qr-code-display';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { useSubscriptionContext } from './SubscriptionContext';
-import { buildCampaignSignupUrl } from '../lib/links';
-import { useAuth } from './AuthProvider';
+import { buildVenueDiscountUrl } from '../lib/links';
 
 interface MyCardsProps {
   cards: Template[];
@@ -171,14 +170,13 @@ export const MyCards: React.FC<MyCardsProps> = ({
   onToggleCampaignEnabled,
 }) => {
   const navigate = useNavigate();
-  const { currentOwner } = useAuth();
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [qrCard, setQrCard] = useState<Template | null>(null);
   const [toggleBusyId, setToggleBusyId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   useSubscriptionContext();
-  const qrUrl = qrCard && currentOwner?.slug ? buildCampaignSignupUrl(currentOwner.slug, qrCard.id) : "";
+  const qrUrl = qrCard ? buildVenueDiscountUrl(qrCard.id) : "";
   const qrDisplayUrl = qrUrl.length > 42 ? `${qrUrl.slice(0, 42)}...` : qrUrl;
 
   const confirmDelete = async () => {
@@ -294,19 +292,19 @@ export const MyCards: React.FC<MyCardsProps> = ({
       <Dialog open={!!qrCard} onOpenChange={(open) => !open && setQrCard(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Campaign Signup QR</DialogTitle>
+            <DialogTitle>Venue Check-in QR</DialogTitle>
             <DialogDescription>
-              Customers can scan this QR code at reception to join <strong>{qrCard?.name}</strong>.
+              Customers scan this QR code at the venue to claim their discount for <strong>{qrCard?.name}</strong>.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center gap-4 py-2">
             {qrUrl && (
               <div className="rounded-xl border bg-white p-3">
-                <QrCodeDisplay value={qrUrl} className="h-56 w-56" label="Campaign signup QR code" />
+                <QrCodeDisplay value={qrUrl} className="h-56 w-56" label="Venue check-in QR code" />
               </div>
             )}
             <div className="w-full space-y-2">
-              <Label className="text-xs text-muted-foreground">Signup link</Label>
+              <Label className="text-xs text-muted-foreground">Check-in link</Label>
               <div className="flex items-center gap-2">
                 <Input readOnly value={qrDisplayUrl || qrUrl} className="text-xs font-mono bg-muted/40" />
                 <Button type="button" variant="outline" size="icon" onClick={handleCopyQrUrl} title="Copy link">

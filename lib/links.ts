@@ -1,3 +1,12 @@
+import type { UserRole } from "../types";
+
+export const getDefaultRouteForRole = (role: UserRole | null | undefined): string => {
+  if (role === "customer") return "/customer/visits";
+  if (role === "admin") return "/admin/award-points";
+  if (role === "owner" || role === "staff") return "/discount-requests";
+  return "/login";
+};
+
 export const buildPublicCardUrl = (slug: string, uniqueId: string) => {
   if (!slug) return "";
   if (typeof window === "undefined") return `/${slug}/${uniqueId}`;
@@ -7,6 +16,13 @@ export const buildPublicCardUrl = (slug: string, uniqueId: string) => {
 export const buildCampaignSignupUrl = (slug: string, campaignId: string) => {
   if (!slug || !campaignId) return "";
   const path = `/${slug}/join/${encodeURIComponent(campaignId)}`;
+  if (typeof window === "undefined") return path;
+  return `${window.location.origin}${path}`;
+};
+
+export const buildVenueDiscountUrl = (campaignId: string) => {
+  if (!campaignId) return "";
+  const path = `/venue/${encodeURIComponent(campaignId)}`;
   if (typeof window === "undefined") return path;
   return `${window.location.origin}${path}`;
 };
