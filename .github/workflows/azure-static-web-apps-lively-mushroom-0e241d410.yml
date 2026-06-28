@@ -29,7 +29,6 @@ jobs:
           app_location: "/"
           api_location: ""
           output_location: "dist"
-          app_build_command: "npm run generate:sitemap && vite build && cp dist/index.html dist/404.html"
         env:
           VITE_APP_URL: https://lively-mushroom-0e241d410.7.azurestaticapps.net
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
