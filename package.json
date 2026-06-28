@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "generate:sitemap": "node scripts/generate-sitemap.mjs",
-    "build": "npm run generate:sitemap && vite build && cp dist/index.html dist/404.html",
+    "build": "npm run generate:sitemap && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
