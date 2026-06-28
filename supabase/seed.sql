@@ -15,10 +15,10 @@
 do $$
 declare
   v_uid uuid := gen_random_uuid();
-  v_email text := 'admin@daily.com';
+  v_email text := 'admin2@daily.com';
   v_password text := 'daily1234';
   v_business_name text := 'Demo Business';
-  v_slug text := 'demo';
+  v_slug text := 'demo3';
 begin
   -- Clean up any previous demo attempts (old emails or slug conflicts)
   delete from auth.users where email in ('admin@daily', 'admin@daily.com', v_email);
@@ -72,7 +72,7 @@ begin
     v_uid,
     jsonb_build_object('sub', v_uid::text, 'email', v_email),
     'email',
-    v_uid::text,
+    v_email,
     now(),
     now(),
     now()
