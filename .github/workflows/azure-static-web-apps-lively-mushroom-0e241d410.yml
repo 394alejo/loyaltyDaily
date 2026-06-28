@@ -29,6 +29,7 @@ jobs:
           app_location: "/"
           api_location: ""
           output_location: "dist"
+          routes_location: "dist"
         env:
           VITE_APP_URL: https://lively-mushroom-0e241d410.7.azurestaticapps.net
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
