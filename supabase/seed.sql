@@ -15,16 +15,14 @@
 do $$
 declare
   v_uid uuid := gen_random_uuid();
-  v_email text := 'admin@stampee.local';
-  v_password text := 'Admin1234';
+  v_email text := 'admin@daily.com';
+  v_password text := 'daily1234';
   v_business_name text := 'Demo Business';
   v_slug text := 'demo';
 begin
-  -- Skip if the admin account already exists
-  if exists (select 1 from auth.users where email = v_email) then
-    raise notice 'Demo admin already exists. Skipping seed.';
-    return;
-  end if;
+  -- Clean up any previous demo attempts (old emails or slug conflicts)
+  delete from auth.users where email in ('admin@daily', 'admin@daily.com', v_email);
+  delete from public.profiles where slug = v_slug;
 
   -- Create the Supabase auth user
   insert into auth.users (
