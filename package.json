@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "generate:sitemap": "node scripts/generate-sitemap.mjs",
-    "build": "npm run generate:sitemap && vite build && node -e \"require('fs').writeFileSync('dist/staticwebapp.config.json', JSON.stringify({routes:[{route:'/*',serve:'/index.html',statusCode:200}]}))\"",
+    "build": "npm run generate:sitemap && vite build && cp dist/index.html dist/404.html",
     "preview": "vite preview"
   },
   "dependencies": {
